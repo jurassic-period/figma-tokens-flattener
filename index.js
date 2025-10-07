@@ -444,7 +444,7 @@ function flatten() {
             const lightDefaultKey = `Default/Light`;
             const darkDefaultKey = `Default/Dark`;
 
-            //  _____________________________Обработка light токенов
+            //Processing of light tokens
             if (allTokensData.hasOwnProperty(lightFullKey)) {
                 // Special processing transformation of each collection into a flat structure
 
@@ -478,7 +478,7 @@ function flatten() {
                 console.warn(`Collection not found, collection key: ${lightFullKey}`);
             }
 
-            // _____________________________Обработка dark токенов
+            //Processing of dark tokens
             if (allTokensData.hasOwnProperty(darkFullKey)) {
 
                 if (baseKey === 'colors') {
@@ -532,9 +532,5 @@ function flatten() {
         }
     }
 };
-
-// module.exports = {
-//     flatten
-// };
 
 flatten();
