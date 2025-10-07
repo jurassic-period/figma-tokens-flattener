@@ -1,0 +1,16 @@
+{
+  "name": "figma-tokens-flattener",
+  "version": "1.0.14",
+  "description": "A tool for transforming Ant Design tokens from Tokens Studio for Figma (Single file) into flat style mappings for light and dark themes.",
+  "main": "index.js",
+    "bin": {
+    "figma-tokens-flattener": "index.js"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "test:local": "node index.js"
+  },
+  "keywords": ["figma", "design-tokens", "tokens", "json", "flattener", "transformer", "parser"],
+  "author": "Yurii Sudarskii",
+  "license": "ISC"
+}
