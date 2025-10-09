@@ -394,10 +394,16 @@ function flattenComponentsTokens(componentsTokens, contextTokens) {
         Object.keys(componentTokens).forEach(tokenName => {
             const tokenDefinition = componentTokens[tokenName];
 
-            if (tokenDefinition && typeof tokenDefinition === 'object' && Object.hasOwn(tokenDefinition, 'value')) {
-                const rawValue = tokenDefinition.value;
+            if (tokenDefinition && typeof tokenDefinition === 'object') {
+                let rawValueToProcess;
 
-                const processedValue = flattenMapTokens(rawValue, contextTokens);
+                if (Object.hasOwn(tokenDefinition, 'value') && typeof tokenDefinition.value === 'object' && tokenDefinition.value !== null && Object.hasOwn(tokenDefinition.value, 'style')) {
+                    rawValueToProcess = tokenDefinition.value.style;
+                }
+                else if (Object.hasOwn(tokenDefinition, 'value')) {
+                    rawValueToProcess = tokenDefinition.value;
+                }
+                const processedValue = flattenMapTokens(rawValueToProcess, contextTokens);
                 processedComponentTokens[tokenName] = processedValue;
             } else {
                 console.warn(`Unsupported token structure ${componentName}.${tokenName}:`, tokenDefinition);
