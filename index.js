@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const REUSED_KEYS = require('./consts.js');
 
 /* Color */
 function flattenColorGroups(colorGroups) {
@@ -410,6 +411,22 @@ function flattenComponentsTokens(componentsTokens, contextTokens) {
     return flattened;
 }
 
+function addReusedTokens(lightTokens, darkTokens) {
+    const reusedCollection = {};
+
+    Object.keys(lightTokens).forEach((key) => {
+        const value = lightTokens[key];
+
+        if (typeof value === 'number' || REUSED_KEYS.includes(key)) {
+            reusedCollection[key] = value;
+        }
+
+    });
+
+    // darkTokens will take precedence in case of a key match.
+    return { ...darkTokens, ...reusedCollection };
+}
+
 function flatten() {
     const configFilePath = path.resolve('./figma-tokens-flattener-config.json');
     let config = {};
@@ -502,6 +519,10 @@ function flatten() {
                     // We add the remaining default values. They may have nesting, so we put everything in a flat structure.
                     const flattenDefaultValues = flattenDefaultValueTokens(allTokensData[darkDefaultKey]);
                     darkTokens = { ...flattenDefaultValues, ...darkTokens };
+
+                    // The tokens of the light theme contain numeric values, while the dark theme does not contain them to avoid duplication.
+                    // Need to add these values, and some lines (shadows, focus, etc.) because only the light theme has them too.
+                    darkTokens = addReusedTokens(lightTokens, darkTokens);
 
                     const flattenedComponents = flattenComponentsTokens(allTokensData[darkFullKey], darkTokens);
                     darkTokens = { ...darkTokens, components: flattenedComponents };
