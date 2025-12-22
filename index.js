@@ -5,7 +5,7 @@ const path = require('path');
 const REUSED_KEYS = require('./consts.js');
 
 /* Color */
-function flattenColorGroups(colorGroups) {
+function flattenColorGroups(colorGroups, variablesMap) {
     const flattened = {};
     if (!colorGroups || typeof colorGroups !== 'object') {
         console.warn('An object with groups of colors was expected, but received:', colorGroups);
@@ -19,7 +19,9 @@ function flattenColorGroups(colorGroups) {
                 const shadeObj = shades[shadeKey];
                 if (shadeObj && typeof shadeObj === 'object' && shadeObj.hasOwnProperty('value')) {
                     const flatKey = `${groupName}.${shadeKey}`;
-                    flattened[flatKey] = shadeObj.value.toLowerCase();
+                    // flattened[flatKey] = shadeObj.value.toLowerCase();
+                    let resolvedValue = resolveVariableReference(shadeObj.value, variablesMap);
+                    flattened[flatKey] = resolvedValue.toLowerCase();
                 } else {
                     console.warn(`The wrong structure for the color ${groupName}.${shadeKey}:`, shadeObj);
                 }
@@ -32,41 +34,52 @@ function flattenColorGroups(colorGroups) {
 }
 
 /* Seed */
-function flattenSeedTokens(seedTokens) {
+
+function flattenSeedTokens(seedTokens, variablesMap) {
     const flattened = {};
     if (!seedTokens || typeof seedTokens !== 'object') {
         console.warn('An object with seed tokens was expected, but received:', seedTokens);
         return flattened;
     }
 
-
-    Object.keys(seedTokens).forEach(tokenName => {
+    for (const tokenName in seedTokens) {
         const tokenObj = seedTokens[tokenName];
 
         if (!tokenObj || typeof tokenObj !== 'object') {
             console.warn(`Incorrect structure for the seed token ${tokenName}:`, tokenObj);
-            return;
+            continue;
         }
 
         let valueToUse;
 
-        if (Object.hasOwn(tokenObj, 'value') && typeof tokenObj.value === 'object' && tokenObj.value !== null && Object.hasOwn(tokenObj.value, 'style')) {
+        // Checking the token structure
+        // Format 1: {"value": {"style": {... } } }
+        if (tokenObj.hasOwnProperty('value') && typeof tokenObj.value === 'object' && tokenObj.value !== null && tokenObj.value.hasOwnProperty('style')) {
             valueToUse = tokenObj.value.style;
         }
-
-        else if (Object.hasOwn(tokenObj, 'value')) {
+        // Format 2: {"value":"..." }
+        else if (tokenObj.hasOwnProperty('value')) {
             valueToUse = tokenObj.value;
         }
-
-        else if (Object.hasOwn(tokenObj, 'style') && tokenObj.style && typeof tokenObj.style === 'object' && Object.hasOwn(tokenObj.style, 'value')) {
+        // Format 3: {"style": {"value":"..." } }
+        else if (tokenObj.hasOwnProperty('style') && tokenObj.style && typeof tokenObj.style === 'object' && tokenObj.style.hasOwnProperty('value')) {
             valueToUse = tokenObj.style.value;
         }
-
         else {
             console.warn(`Unsupported structure for the seed token ${tokenName}:`, tokenObj);
-            return;
+            continue;
         }
 
+        if (valueToUse && typeof valueToUse === 'object' && valueToUse.hasOwnProperty('value')) {
+            valueToUse = valueToUse.value;
+        }
+
+        // Checking for a link and substituting a value
+        if (typeof valueToUse === 'string' && valueToUse.startsWith('{') && valueToUse.endsWith('}')) {
+            valueToUse = resolveVariableReference(valueToUse, variablesMap);
+        }
+
+        //  Converting a string number to a number
         if (typeof valueToUse === 'string' && !isNaN(valueToUse) && !isNaN(parseFloat(valueToUse))) {
             if (Number.isInteger(parseFloat(valueToUse))) {
                 valueToUse = parseInt(valueToUse, 10);
@@ -76,8 +89,7 @@ function flattenSeedTokens(seedTokens) {
         }
 
         flattened[tokenName] = valueToUse;
-    })
-
+    }
     return flattened;
 }
 
@@ -96,10 +108,21 @@ function hexToRgb(hex) {
     return `${r}, ${g}, ${b}`;
 }
 
-function flattenMapTokens(value, seedContext) {
+function flattenMapTokens(value, contextTokens, variablesMap) { // Добавлен параметр variablesMap
     if (typeof value !== 'string') return value;
     const str = value.trim();
 
+    // Checking whether the string is a reference to an external variable (for example, {Testname.core.color.100})
+    const externalReferenceMatch = str.match(/^(\{([A-Za-z_][\w.%-]*\.[\w.%-]*\.[\w.%-]+(?:\.[\w.%-]+)*)\})$/);
+    if (externalReferenceMatch && variablesMap) {
+        const fullReference = externalReferenceMatch[1];
+        // Calling resolveVariableReference to substitute a value from a variablesMap
+        const resolvedValue = resolveVariableReference(fullReference, variablesMap);
+
+        return resolvedValue;
+    }
+
+    // If this is not an external link, we process it as usual using contextTokens
     const NAME = '[a-zA-Z_][\\w.-]*';
     const TOKEN_RE = new RegExp('(\\{(' + NAME + ')\\})|\\$(' + NAME + ')', 'g');
     const SINGLE_TOKEN_BRACED = new RegExp('^\\{(' + NAME + ')\\}$');
@@ -108,9 +131,8 @@ function flattenMapTokens(value, seedContext) {
     const isHex = (colorString) => typeof colorString === 'string' && /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(colorString);
 
     const getTokenValue = (name) =>
-        Object.prototype.hasOwnProperty.call(seedContext, name) ? seedContext[name] : undefined;
+        Object.prototype.hasOwnProperty.call(contextTokens, name) ? contextTokens[name] : undefined;
 
-    // {token} — return the token value as it is
     const tokenMatch = str.match(SINGLE_TOKEN_BRACED);
     if (tokenMatch) {
         const tokenValue = getTokenValue(tokenMatch[1]);
@@ -125,13 +147,13 @@ function flattenMapTokens(value, seedContext) {
             const name = nameBraced;
             const tokenValue = getTokenValue(name);
             if (tokenValue === undefined) return match;
-            if (isHex(tokenValue)) return String(hexToRgb(tokenValue)); // "r, g, b"
+            if (isHex(tokenValue)) return String(hexToRgb(tokenValue));
             return String(tokenValue);
         });
         return 'rgba(' + replaced + ')';
     }
 
-    // An attempt to calculate an arithmetic expression
+    // Attempt to calculate an arithmetic expression (from contextTokens)
     let hadUnknown = false;
     let hadNonNumeric = false;
 
@@ -148,7 +170,7 @@ function flattenMapTokens(value, seedContext) {
 
         hadNonNumeric = true;
         return match;
-    })
+    });
 
     if (!hadUnknown && !hadNonNumeric) {
         if (/[^0-9+\-*/().\s]/.test(expressionWithResolvedTokens)) {
@@ -173,25 +195,25 @@ function flattenMapTokens(value, seedContext) {
     return generic;
 }
 
-function flattenMapTokensWrapper(mapTokens, seedContext) {
+function flattenMapTokensWrapper(mapTokens, contextTokens, variablesMap) {
     const flattened = {};
     if (!mapTokens || typeof mapTokens !== 'object') {
         console.warn('An object with map tokens was expected, but received:', mapTokens);
         return flattened;
     }
 
-    Object.keys(mapTokens).forEach(tokenName => {
+    for (const tokenName in mapTokens) {
         const tokenContent = mapTokens[tokenName];
 
+        // Check that the object has the expected structure { "value": "..."}
         if (tokenContent && typeof tokenContent === 'object' && tokenContent.hasOwnProperty('value')) {
             const rawValue = tokenContent.value;
-
-            const computedValue = flattenMapTokens(rawValue, seedContext);
-            flattened[tokenName] = computedValue;
+            const processedValue = flattenMapTokens(rawValue, contextTokens, variablesMap);
+            flattened[tokenName] = processedValue;
         } else {
             console.warn(`Incorrect structure for the map token ${tokenName}:`, tokenContent);
         }
-    })
+    }
     return flattened;
 }
 
@@ -252,7 +274,7 @@ function processBoxShadow(shadowData, contextTokens) {
     return processedShadows.join(', ');
 }
 
-function flattenAliasTokens(aliasTokens, contextTokens) {
+function flattenAliasTokens(aliasTokens, contextTokens, variablesMap) {
     const flattened = {};
     if (!aliasTokens || typeof aliasTokens !== 'object') {
         console.warn('An object with alias tokens was expected, but received:', aliasTokens);
@@ -280,7 +302,7 @@ function flattenAliasTokens(aliasTokens, contextTokens) {
             }
             else {
                 const rawValue = tokenContent.value;
-                const processedValue = flattenMapTokens(rawValue, contextTokens);
+                const processedValue = flattenMapTokens(rawValue, contextTokens, variablesMap);
                 flattened[tokenName] = processedValue;
             }
         } else {
@@ -433,6 +455,78 @@ function addReusedTokens(lightTokens, darkTokens) {
     return { ...darkTokens, ...reusedCollection };
 }
 
+/* We get the values of the variable file, if there is one */
+function loadVariableFiles(tokensFilePath) {
+    const tokensDir = path.dirname(tokensFilePath);
+    const allFiles = fs.readdirSync(tokensDir);
+    const variableFiles = allFiles.filter(file => file.endsWith('_variable.json'));
+    const varFileName = variableFiles[0];
+
+    let map = {};
+
+    if (varFileName) {
+        const varFilePath = path.join(tokensDir, varFileName);
+        const varFileContent = fs.readFileSync(varFilePath, 'utf-8');
+        map = JSON.parse(varFileContent);
+    }
+
+    return { variablesMap: Object.keys(map).length > 0 ? map : null, varFileName };
+}
+
+function resolveVariableReference(value, variablesMap) {
+    if (typeof value !== 'string' || !value.startsWith('{') || !value.endsWith('}')) {
+        return value;
+    }
+
+    const reference = value.slice(1, -1);
+
+    const dotCount = (reference.match(/\./g) || []).length;
+    if (dotCount < 3) {
+        // Link to styles within tokens.json is not made up of variables
+        return value;
+    }
+
+    if (variablesMap && typeof variablesMap === 'object') {
+        const keys = reference.split(".");
+
+        // Check if the first level (file name) exists
+        let currentLevel = variablesMap[keys[0]];
+        if (currentLevel === undefined) {
+            console.warn(`The path "${reference}" was not found in the variables for the reference: ${value}. Level 0 (${keys[0]}) does not exist.`);
+            return value;
+        }
+
+        // Going through the rest of the keys
+        for (let i = 1; i < keys.length; i++) { // We start with 1, because 0 is the file name
+            const key = keys[i];
+            if (currentLevel && typeof currentLevel === 'object' && Object.prototype.hasOwnProperty.call(currentLevel, key)) {
+                currentLevel = currentLevel[key]; // Going down to the level below
+            } else {
+                console.warn(`The path "${reference}" was not found in the variables for the reference: ${value}. The ${i} (${key}) level does not exist.`);
+                return value; // The path was not found, we return it as it is.
+            }
+        }
+
+        // Checking if the final object has the 'value' property.
+        if (currentLevel && typeof currentLevel === 'object' && Object.prototype.hasOwnProperty.call(currentLevel, 'value')) {
+            return currentLevel.value;
+        } else {
+            console.warn(`The final object along the path "${reference}" does not contain the 'value' property. Link: ${value}.`);
+            // Let's check if the final level is just a string/number (and not an object with {value: ...})
+            if (currentLevel !== null && currentLevel !== undefined && typeof currentLevel !== 'object') {
+                console.log(`resolveVariableReference: the value for '${link}' does not have the value of 'value', taking into account:`, currentLevel);
+                return currentLevel;
+            }
+            return value; // Incorrect structure, we return it as it is
+        }
+
+    } else {
+        // variablesMap is not an object or is null/undefined
+        console.warn(`variablesMap is not an object. Link: ${value}.`);
+        return value;
+    }
+}
+
 function flatten() {
     const configFilePath = path.resolve('./figma-tokens-flattener-config.json');
     let config = {};
@@ -451,6 +545,8 @@ function flatten() {
 
     const inputFilePath = path.resolve(config.source?.tokensFile || './tokens.json');
     const outputDir = path.resolve(config.target?.jsonsDir || './'); // Save it to the current default directory
+    const { variablesMap, varFileName } = loadVariableFiles(inputFilePath); // A custom styles file that is referenced from the main file, full file name
+
 
     const baseKeys = ['colors', 'seed', 'map', 'alias', 'components']; // The keys we need from the original token
 
@@ -472,19 +568,19 @@ function flatten() {
                 // Special processing transformation of each collection into a flat structure
 
                 if (baseKey === 'colors') {
-                    const flattenedColors = flattenColorGroups(allTokensData[lightFullKey]);
-                    lightTokens = { ...lightTokens, ...flattenedColors }; // Объединяем с существующими токенами
+                    const flattenedColors = flattenColorGroups(allTokensData[lightFullKey], variablesMap);
+                    lightTokens = { ...lightTokens, ...flattenedColors }; // Combining it with existing tokens
                 }
                 else if (baseKey === 'seed') {
-                    const flattenedSeeds = flattenSeedTokens(allTokensData[lightFullKey]);
+                    const flattenedSeeds = flattenSeedTokens(allTokensData[lightFullKey], variablesMap);
                     lightTokens = { ...lightTokens, ...flattenedSeeds };
                 }
                 else if (baseKey === 'map') {
-                    const flattenedMaps = flattenMapTokensWrapper(allTokensData[lightFullKey], lightTokens);
+                    const flattenedMaps = flattenMapTokensWrapper(allTokensData[lightFullKey], lightTokens, variablesMap);
                     lightTokens = { ...lightTokens, ...flattenedMaps };
                 }
                 else if (baseKey === 'alias') {
-                    const flattenedAliases = flattenAliasTokens(allTokensData[lightFullKey], lightTokens);
+                    const flattenedAliases = flattenAliasTokens(allTokensData[lightFullKey], lightTokens, variablesMap);
                     lightTokens = { ...lightTokens, ...flattenedAliases };
                     const resolved = checkAndResolveVarValues(lightTokens);
                     lightTokens = { ...lightTokens, ...resolved };
@@ -502,51 +598,54 @@ function flatten() {
             }
 
             //Processing of dark tokens
-            if (allTokensData.hasOwnProperty(darkFullKey)) {
+            if (!variablesMap) {
+                if (allTokensData.hasOwnProperty(darkFullKey)) {
+                    if (baseKey === 'colors') {
+                        const flattenedColors = flattenColorGroups(allTokensData[darkFullKey], variablesMap);
+                        darkTokens = { ...darkTokens, ...flattenedColors };
+                    } else if (baseKey === 'seed') {
+                        const flattenedSeeds = flattenSeedTokens(allTokensData[darkFullKey]);
+                        darkTokens = { ...darkTokens, ...flattenedSeeds };
+                    }
+                    else if (baseKey === 'map') {
+                        const flattenedMaps = flattenMapTokensWrapper(allTokensData[darkFullKey], darkTokens);
+                        darkTokens = { ...darkTokens, ...flattenedMaps };
+                    }
+                    else if (baseKey === 'alias') {
+                        const flattenedAliases = flattenAliasTokens(allTokensData[darkFullKey], darkTokens);
+                        darkTokens = { ...darkTokens, ...flattenedAliases };
+                        const resolved = checkAndResolveVarValues(darkTokens);
+                        darkTokens = { ...darkTokens, ...resolved };
+                    }
+                    else if (baseKey === 'components') {
+                        // We add the remaining default values. They may have nesting, so we put everything in a flat structure.
+                        const flattenDefaultValues = flattenDefaultValueTokens(allTokensData[darkDefaultKey]);
+                        darkTokens = { ...flattenDefaultValues, ...darkTokens };
 
-                if (baseKey === 'colors') {
-                    const flattenedColors = flattenColorGroups(allTokensData[darkFullKey]);
-                    darkTokens = { ...darkTokens, ...flattenedColors };
-                } else if (baseKey === 'seed') {
-                    const flattenedSeeds = flattenSeedTokens(allTokensData[darkFullKey]);
-                    darkTokens = { ...darkTokens, ...flattenedSeeds };
-                }
-                else if (baseKey === 'map') {
-                    const flattenedMaps = flattenMapTokensWrapper(allTokensData[darkFullKey], darkTokens);
-                    darkTokens = { ...darkTokens, ...flattenedMaps };
-                }
-                else if (baseKey === 'alias') {
-                    const flattenedAliases = flattenAliasTokens(allTokensData[darkFullKey], darkTokens);
-                    darkTokens = { ...darkTokens, ...flattenedAliases };
-                    const resolved = checkAndResolveVarValues(darkTokens);
-                    darkTokens = { ...darkTokens, ...resolved };
-                }
-                else if (baseKey === 'components') {
-                    // We add the remaining default values. They may have nesting, so we put everything in a flat structure.
-                    const flattenDefaultValues = flattenDefaultValueTokens(allTokensData[darkDefaultKey]);
-                    darkTokens = { ...flattenDefaultValues, ...darkTokens };
+                        // The tokens of the light theme contain numeric values, while the dark theme does not contain them to avoid duplication.
+                        // Need to add these values, and some lines (shadows, focus, etc.) because only the light theme has them too.
+                        darkTokens = addReusedTokens(lightTokens, darkTokens);
 
-                    // The tokens of the light theme contain numeric values, while the dark theme does not contain them to avoid duplication.
-                    // Need to add these values, and some lines (shadows, focus, etc.) because only the light theme has them too.
-                    darkTokens = addReusedTokens(lightTokens, darkTokens);
-
-                    const flattenedComponents = flattenComponentsTokens(allTokensData[darkFullKey], darkTokens);
-                    darkTokens = { ...darkTokens, components: flattenedComponents };
+                        const flattenedComponents = flattenComponentsTokens(allTokensData[darkFullKey], darkTokens);
+                        darkTokens = { ...darkTokens, components: flattenedComponents };
+                    }
+                } else {
+                    console.warn(`Collection not found, collection key: ${darkFullKey}`);
                 }
-            } else {
-                console.warn(`Collection not found, collection key: ${darkFullKey}`);
             }
         }
-
-        const lightOutputPath = path.join(outputDir, 'light.json');
+        const lightOutputPath = path.join(outputDir, variablesMap ? varFileName.replace('_variable.json', '.json') : 'light.json');
         const darkOutputPath = path.join(outputDir, 'dark.json');
 
-        console.log(`Saving light and dark tokens in: ${outputDir}`);
+        console.log(`Saving in: ${outputDir}`);
         fs.writeFileSync(lightOutputPath, JSON.stringify(lightTokens, null, 2));
 
-        fs.writeFileSync(darkOutputPath, JSON.stringify(darkTokens, null, 2));
+        if (!variablesMap) {
+            fs.writeFileSync(darkOutputPath, JSON.stringify(darkTokens, null, 2));
 
-        console.log('\nReady! Light files.json and dark.json files have been created.');
+        }
+
+        console.log('\nReady!');
 
     } catch (error) {
         if (error.code === 'ENOENT') {
