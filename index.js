@@ -19,7 +19,6 @@ function flattenColorGroups(colorGroups, variablesMap) {
                 const shadeObj = shades[shadeKey];
                 if (shadeObj && typeof shadeObj === 'object' && shadeObj.hasOwnProperty('value')) {
                     const flatKey = `${groupName}.${shadeKey}`;
-                    // flattened[flatKey] = shadeObj.value.toLowerCase();
                     let resolvedValue = resolveVariableReference(shadeObj.value, variablesMap);
                     flattened[flatKey] = resolvedValue.toLowerCase();
                 } else {
@@ -112,8 +111,8 @@ function flattenMapTokens(value, contextTokens, variablesMap) { // Добавл�
     if (typeof value !== 'string') return value;
     const str = value.trim();
 
-    // Checking whether the string is a reference to an external variable (for example, {Testname.core.color.100})
-    const externalReferenceMatch = str.match(/^(\{([A-Za-z_][\w.%-]*\.[\w.%-]*\.[\w.%-]+(?:\.[\w.%-]+)*)\})$/);
+    // Checking whether the string is a reference to an external variable (for example, {Testname.core.color.100} or {Testname.core.color.100 00})
+    const externalReferenceMatch = str.match(/^(\{([A-Za-z_][\w.%-]*\.[\w.%-]*\.[\w.%-\s]+(?:\.[\w.%-\s]*)*)\})$/);
     if (externalReferenceMatch && variablesMap) {
         const fullReference = externalReferenceMatch[1];
         // Calling resolveVariableReference to substitute a value from a variablesMap
@@ -481,7 +480,7 @@ function resolveVariableReference(value, variablesMap) {
     const reference = value.slice(1, -1);
 
     const dotCount = (reference.match(/\./g) || []).length;
-    if (dotCount < 3) {
+    if (dotCount < 2) {
         // Link to styles within tokens.json is not made up of variables
         return value;
     }
@@ -509,6 +508,9 @@ function resolveVariableReference(value, variablesMap) {
 
         // Checking if the final object has the 'value' property.
         if (currentLevel && typeof currentLevel === 'object' && Object.prototype.hasOwnProperty.call(currentLevel, 'value')) {
+            if (typeof currentLevel.value === 'string' && currentLevel.value.startsWith('{') && currentLevel.value.endsWith('}')) {
+                return resolveVariableReference(currentLevel.value, variablesMap);
+            }
             return currentLevel.value;
         } else {
             console.warn(`The final object along the path "${reference}" does not contain the 'value' property. Link: ${value}.`);
